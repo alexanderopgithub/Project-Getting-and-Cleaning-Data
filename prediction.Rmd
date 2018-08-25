@@ -1,0 +1,165 @@
+---
+title: "Prediction of activity"
+date: 24-08-2018
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+We study a data set of labelled measurements on 6 persons performing barbell lifts in the correct and 4 different incorrect ways.
+The goal of this report is to forecast the way the lifting was performed given the different measurements. 
+We experiment with 5 different forecasting methods and 2 ensemble methods. The best results are obtained with a random forest, which delivered
+99\% accuracy in our own validation set and 100\% accuracy in the true test set.
+
+
+## Introduction to data set and pre-processing
+In our analysis we use four R libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(parallel)
+library(doParallel)
+library(dplyr)
+library(caret)
+```
+
+The data is obtained from the web and is separated for us in a training and testing set. 
+```{r, warning=FALSE, message=FALSE}
+download.file(url =  'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',destfile = 'pml-training.csv')
+download.file(url =  'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',destfile = 'pml-testing.csv')
+training = read.csv("pml-training.csv")
+testing  = read.csv("pml-testing.csv")
+```
+
+The training set consists of 19622 observations of 160 variables. The test set has 20 observations of 160 variables. 
+The goal of this report is to predict variable "classe" given all other measurements. The variable "classe" is available for all observations in the training set. The testing set lacks the variable "classe", but has a variable "problem_id" instead. The variable "classe" is a factor variable ranging from A to E.
+
+
+The machine learning techniques we want to apply have problems with empty or nan features. We remove these features from the dataset. In addition we remove features related to an indicator ("x"), participant ("user_name") and timing of the measurement ("raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window" and "num_window") from the training set. We remove the same features from the testing set, and remove "problem_id" to make the set of features identical. In this way 107 features are removed, and we continue with 53 variables.
+
+```{r}
+AllCol = colnames(training)
+RemoveCol = ((colSums(training=="" | is.na(training)) > 10000)  |   (AllCol %in% c('X', 'user_name','raw_timestamp_part_1','raw_timestamp_part_2','cvtd_timestamp','new_window', 'num_window')))
+A = (1:ncol(training))[RemoveCol]
+training = select(training,-A)
+testing = select(testing,-A)
+
+testing = select(testing,-53) # remove "problem_id"
+```
+
+To perform our analysis we separate the training set into trainingQ (to establish the model) and trainingV (to establish an estimate accuracy).
+We place 10000 random observations into trainingQ and the remainder into trainingV.
+```{r}
+set.seed(13)
+PickPart = sample(1:19622,10000,replace=FALSE)
+trainingQ = training[PickPart,]
+trainingV = training[-PickPart,]
+```
+
+
+## Model fitting and evaluation
+We want to apply the caret package to estimate different machine learning models. We change three of the standard settings. First we changed from bootstrap to cross validation (cv). Second, we recognize that lowering the number from 10 (standard) to 5 gives identical results. Third, we apply parallel computing (note: parallel turned off to make knitr work) 
+
+```{r}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = FALSE)
+```
+
+We estimate 5 different models (RF, GBM, LDA, RPart and SVM) on the dataset. 
+
+```{r}
+set.seed(123)
+modelRF <- train(classe ~ ., data=trainingQ,method="rf",trControl = fitControl)
+modelGBM = train(classe ~ ., data=trainingQ,method="gbm", verbose=FALSE,trControl = fitControl)
+modelLDA = train(classe ~ ., data=trainingQ,method="lda",trControl = fitControl)
+modelRPart = train(classe ~ ., data=trainingQ,method="rpart",trControl = fitControl)
+modelSVM <- train(classe ~ ., data=trainingQ,method="svmRadial",trControl = fitControl)
+```
+
+In addition we estimate 2 ensemble models (RF+GBM and RF+GBM+LDA+RPart+SVM). We stack both models using random forests.
+```{r}
+predQRF  = predict(modelRF,newdata=trainingQ)
+predQGBM = predict(modelGBM,newdata=trainingQ)
+predQLDA = predict(modelLDA,newdata=trainingQ)
+predQRPart = predict(modelRPart,newdata=trainingQ)
+predQSVM = predict(modelSVM,newdata=trainingQ)
+
+DFComb1 = data.frame(classe = trainingQ$classe,predQRF,predQGBM)
+modelComb1 <- train(classe ~ ., data=DFComb1,method="rf")
+predQComb1 = predict(modelComb1,newdata=DFComb1)
+
+DFComb2 = data.frame(classe = trainingQ$classe,predQRF,predQGBM,predQLDA,predQRPart,predQSVM)
+modelComb2 <- train(classe ~ ., data=DFComb2,method="rf")
+predQComb2 = predict(modelComb2,newdata=DFComb2)
+```
+
+Stop parallel computing, and make the predictions for the validation dataset for the 5 individual models and 2 ensemble models.
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+
+predRF  = predict(modelRF,newdata=trainingV)
+predGBM = predict(modelGBM,newdata=trainingV)
+predLDA = predict(modelLDA,newdata=trainingV)
+predRPart = predict(modelRPart,newdata=trainingV)
+predSVM = predict(modelSVM,newdata=trainingV)
+
+DFComb1Train = data.frame(classe = trainingV$classe,predQRF=predRF,predQGBM=predGBM)
+predComb1 = predict(modelComb1,newdata=DFComb1Train)
+
+DFComb2Train = data.frame(classe = trainingV$classe,predQRF=predRF,predQGBM=predGBM,predQLDA=predLDA,predQRPart=predRPart,predQSVM=predSVM)
+predComb2 = predict(modelComb2,newdata=DFComb2Train)
+```
+
+We determine the accuracy for the different models for both the training (in-sample) and validation (out-of-sample) set. We find the random forest outperforms all other methods.
+```{r}
+AccRFV = confusionMatrix(predRF,trainingV$classe)$overall[1]
+AccGBMV = confusionMatrix(predGBM,trainingV$classe)$overall[1]
+AccLDAV = confusionMatrix(predLDA,trainingV$classe)$overall[1]
+AccRPartV = confusionMatrix(predRPart,trainingV$classe)$overall[1]
+AccSVMV = confusionMatrix(predSVM,trainingV$classe)$overall[1]
+
+AccComb1V = confusionMatrix(predComb1,trainingV$classe)$overall[1]
+AccComb2V = confusionMatrix(predComb2,trainingV$classe)$overall[1]
+
+# accuracy for in-sample part
+AccRFQ = confusionMatrix(predQRF,trainingQ$classe)$overall[1]
+AccGBMQ = confusionMatrix(predQGBM,trainingQ$classe)$overall[1]
+AccLDAQ = confusionMatrix(predQLDA,trainingQ$classe)$overall[1]
+AccRPartQ = confusionMatrix(predQRPart,trainingQ$classe)$overall[1]
+AccSVMQ = confusionMatrix(predQSVM,trainingQ$classe)$overall[1]
+
+AccComb1Q = confusionMatrix(predQComb1,trainingQ$classe)$overall[1]
+AccComb2Q = confusionMatrix(predQComb2,trainingQ$classe)$overall[1]
+
+Accuracy = data.frame(In_sample = c(AccRFQ, AccGBMQ, AccLDAQ,AccRPartQ,AccSVMQ, AccComb1Q,AccComb2Q), 
+                      Out_sample = c(AccRFV, AccGBMV, AccLDAV, AccRPartV,AccSVMV, AccComb1V,AccComb2V))
+rownames(Accuracy) = c("RF","GBM","LDA","RPart","SVM","Comb1","Comb2")
+print(Accuracy)
+```
+
+
+Now we can provide the predictions from the different models for the test set
+```{r}
+TestpredRF  = predict(modelRF,newdata=testing)
+TestpredGBM = predict(modelGBM,newdata=testing)
+TestpredLDA = predict(modelLDA,newdata=testing)
+TestpredRPart = predict(modelRPart,newdata=testing)
+TestpredSVM = predict(modelSVM,newdata=testing)
+
+TestDFComb1 = data.frame(predQRF=TestpredRF,predQGBM=TestpredGBM,predQLDA=TestpredLDA)
+TestpredComb1 = predict(modelComb1,newdata=TestDFComb1)
+
+TestDFComb2 = data.frame(predQRF=TestpredRF,predQGBM=TestpredGBM,predQLDA=TestpredLDA,predQRPart=TestpredRPart,predQSVM=TestpredSVM)
+TestpredComb2 = predict(modelComb2,newdata=TestDFComb2)
+
+TestResult = data.frame(RF=TestpredRF,GBM=TestpredGBM,LDA=TestpredLDA,RPart=TestpredRPart,SVM=TestpredSVM,Comb1=TestpredComb1,Comb2=TestpredComb2)
+print(TestResult)
+```
+
+We use our results for the random forest for the quiz set. These turned out to be 100\% correct!
