@@ -1,0 +1,30 @@
+---
+title: "Project Leaflet"
+date: "25 september 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+We create a visualization to show several towns in Europe and South America.
+
+We use https://www.latlong.net/ to obtain latitudes and longitudes for 8 different towns, and add these to a dataframe.
+Next create an extra label with continent (Europe and South America), which are colored navy and red.
+
+```{r}
+library(leaflet)
+library(scales)
+
+
+df<- data.frame( lat =  c(52.370216, 53.214470,  50.850346, 48.856613, 52.520008, 39.039320,-22.906847,10.480594),
+                 lng =  c( 4.895168,  6.566480,   4.351721,  2.352222, 13.404954, 17.108840,-43.172897,-66.903603),  
+       cat = c("Europe", "Europe", "Europe", "Europe", "Europe","Europe","South America","South America"))
+pal <- colorFactor(c("navy", "red"), domain = c("Europe", "South America"))
+
+df %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(lng = ~lng, lat=~lat, color = ~pal(cat) , popup = ~as.character(cat),clusterOptions = markerClusterOptions())
+
+```
