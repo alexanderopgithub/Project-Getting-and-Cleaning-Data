@@ -1,0 +1,28 @@
+---
+title: "Experiment Plotly"
+date: "03-10-2018"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+## Slide with R Output
+Load three libraries and a dataset. In the next slide we plot crime versus pctmetro using color to differentiatie on variable single.
+```{r, echo = TRUE}
+library(plotly)
+library(foreign)
+library(MASS)
+
+cdata <- read.dta("https://stats.idre.ucla.edu/stat/data/crime.dta")
+
+```
+
+## Slide with Plot
+
+```{r}
+plot_ly(cdata,x=~crime,y=~pctmetro,type="scatter",color=~factor(cut(cdata$single,4)))
+```
+
